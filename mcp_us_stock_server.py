@@ -1,52 +1,51 @@
 from mcp.server.fastmcp import FastMCP
-import yfinance as yf
+import os 
+import requests
 
 mcp = FastMCP("US_Stock_Agent")
 
 @mcp.tool()
-def get_daily_market_summary() -> str:
-    """
-    当需要分析今日美股走势、评估宏观风险、或者查看 VIX 恐慌指数时，必须调用此工具。
-    它会返回真实的标普、纳指、道指以及 VIX 的最新点位和涨跌幅。
-    """
-    targets = {
-        "标普500指数 (SPY)": "^GSPC",
-        "纳斯达克指数 (QQQ)": "^IXIC",
-        "道琼斯指数 (DIA)": "^DJI",
-        "VIX 恐慌指数": "^VIX"
-    }
+def get_daily_market_summary():
+    # 1. 从云端环境中提取你的专属通行证
+    api_key = os.getenv("FMP_API_KEY")
+    if not api_key:
+        return "数据系统异常：未在环境变量中检测到 FMP_API_KEY，请检查 Render 配置。"
 
-    report_lines = ["📊 【今日美股与宏观市场核心数据】\n"]
+    # 2. 锁定你要监控的核心标的（完美包含 VIX 恐慌指数）
+    symbols = ["SPY", "QQQ", "DIA", "^VIX"]
+    market_data = {}
 
-    for name, ticker_symbol in targets.items():
-        try:
-            ticker = yf.Ticker(ticker_symbol)
-            hist = ticker.history(period='5d')
-
-            if len(hist) >= 2:
-                latest_close = hist['Close'].iloc(-1)
-                prev_close = hist['Close'].iloc(-2)
-                pct_change = ((latest_close-prev_close)/prev_close)*100
-
-                trend = "📈 上涨" if pct_change > 0 else "📉 下跌"
-                line = f"- {name}:最新点位 {latest_close:.2f} | 较前一交易日 {trend} {abs(pct_change):.2f}%"
-
-                if ticker_symbol == "^VIX":
-                    if latest_close > 25.0:
-                        line += " ⚠️ (警告：VIX 处于高位，市场恐慌情绪蔓延，流动性可能收紧)"
-                    
-                    elif latest_close < 15.0:
-                        line += " 🟢 (提示：VIX 处于低位，市场情绪平稳，风险偏好较高)"
-                
-                report_lines.append(line)
+    try:
+        # 3. 逐个向 FMP 发起极其正规的 API 问询
+        for sym in symbols:
+            # 构建正规军专属的请求 URL
+            url = f"https://financialmodelingprep.com/api/v3/quote/{sym}?apikey={api_key}"
             
+            # 设置 10 秒超时，防止网络卡死
+            response = requests.get(url, timeout=10)
+            data = response.json()
+
+            if data and len(data) > 0:
+                info = data[0]
+                market_data[sym] = {
+                    "当前价格": info.get("price"),
+                    "日内涨跌幅": f"{info.get('changesPercentage')}%",
+                    "今日最高": info.get("dayHigh"),
+                    "今日最低": info.get("dayLow"),
+                    "成交量": info.get("volume")
+                }
             else:
-                report_lines.append(f"- {name}: 暂无足够数据")
-            
-        except Exception as e:
-            report_lines.append(f"- {name}: 数据获取失败 ({str(e)})")
-    
-    return "\n".join(report_lines)
+                market_data[sym] = "数据提供商未能返回该标的有效数据"
+
+        # 4. 将结构化数据组装成 DeepSeek 大脑最喜欢的格式
+        report_text = "【底层 API 实时数据源已切入】\n今日美股及波动率核心观测数据如下：\n"
+        for sym, details in market_data.items():
+            report_text += f"- {sym}: {details}\n"
+
+        return report_text
+
+    except Exception as e:
+        return f"底层数据 API 请求物理崩溃，错误信息: {str(e)}"
 
 if __name__ == "__main__":
     mcp.run()
